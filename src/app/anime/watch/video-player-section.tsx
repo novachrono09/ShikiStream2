@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { useAnimeStore } from "@/store/anime-store";
 import { IWatchedAnime } from "@/types/watched-anime";
 import KitsunePlayer from "@/components/kitsune-player";
@@ -13,102 +13,96 @@ import { useAuthStore } from "@/store/auth-store";
 import { pb } from "@/lib/pocketbase";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { GET_EPISODE_DATA } from "@/constants/query-keys";
+import { useQueryClient } from "@tanstack/react-query";
+
+interface IServer {
+  serverName: string;
+  serverType: "sub" | "dub";
+}
 
 const VideoPlayerSection = () => {
   const { selectedEpisode, anime } = useAnimeStore();
   const { data: serversData } = useGetEpisodeServers(selectedEpisode);
+  const queryClient = useQueryClient();
 
-  const [serverName, setServerName] = useState<string>("");
-  const [key, setKey] = useState<string>("");
-  
-  const [availableSubServers, setAvailableSubServers] = useState<any[]>([]);
-  const [availableDubServers, setAvailableDubServers] = useState<any[]>([]);
+  const [activeServer, setActiveServer] = useState<IServer | null>(null);
+  const [availableServers, setAvailableServers] = useState<IServer[]>([]);
+  const [serversSearched, setServersSearched] = useState(false);
 
   const { auth, setAuth } = useAuthStore();
   const [autoSkip, setAutoSkip] = useState<boolean>(
     auth?.autoSkip || Boolean(localStorage.getItem("autoSkip")) || false
   );
 
+  // Effect to reset state when a new episode is selected
+  useEffect(() => {
+    setActiveServer(null);
+    setAvailableServers([]);
+    setServersSearched(false);
+    // Invalidate any cached data for the old episode
+    queryClient.invalidateQueries({ queryKey: [GET_EPISODE_DATA] });
+  }, [selectedEpisode, queryClient]);
+
   const {
     data: episodeData,
-    isLoading,
+    isLoading: isEpisodeDataLoading,
     refetch,
-  } = useGetEpisodeData(selectedEpisode, serverName, key, !!serverName);
+  } = useGetEpisodeData(
+    selectedEpisode,
+    activeServer?.serverName || "",
+    activeServer?.serverType || "",
+    !!activeServer
+  );
 
-  useEffect(() => {
-    if (!serversData || serverName) return;
+  const findWorkingServers = useCallback(async () => {
+    if (!serversData || serversSearched) return;
 
-    const findWorkingServers = async () => {
-      const subServers = serversData.sub || [];
-      const dubServers = serversData.dub || [];
+    setServersSearched(true);
+    const workingServers: IServer[] = [];
 
-      const workingSub = [];
-      for (const server of subServers) {
-        try {
-          const { data: newData, isSuccess } = await refetch({
-            queryKey: [
-              GET_EPISODE_DATA,
-              selectedEpisode,
-              server.serverName,
-              "sub",
-            ],
-          });
-          if (isSuccess && newData && newData.sources.length > 0) {
-            workingSub.push(server);
-          }
-        } catch (error) {
-          console.error(
-            `Server ${server.serverName} (sub) failed:`,
-            error
-          );
+    const checkServer = async (server: any, type: "sub" | "dub") => {
+      try {
+        const { data: newData, isSuccess } = await refetch({
+          queryKey: [
+            GET_EPISODE_DATA,
+            selectedEpisode,
+            server.serverName,
+            type,
+          ],
+        });
+        if (isSuccess && newData && newData.sources.length > 0) {
+          workingServers.push({ serverName: server.serverName, serverType: type });
         }
-      }
-      setAvailableSubServers(workingSub);
-
-      const workingDub = [];
-      for (const server of dubServers) {
-        try {
-          const { data: newData, isSuccess } = await refetch({
-            queryKey: [
-              GET_EPISODE_DATA,
-              selectedEpisode,
-              server.serverName,
-              "dub",
-            ],
-          });
-          if (isSuccess && newData && newData.sources.length > 0) {
-            workingDub.push(server);
-          }
-        } catch (error) {
-          console.error(
-            `Server ${server.serverName} (dub) failed:`,
-            error
-          );
-        }
-      }
-      setAvailableDubServers(workingDub);
-
-      if (workingSub.length > 0) {
-        setServerName(workingSub[0].serverName);
-        setKey("sub");
-      } else if (workingDub.length > 0) {
-        setServerName(workingDub[0].serverName);
-        setKey("dub");
+      } catch (error) {
+        console.error(`Server ${server.serverName} (${type}) failed:`, error);
       }
     };
 
+    const subServers = serversData.sub || [];
+    const dubServers = serversData.dub || [];
+
+    await Promise.all([
+        ...subServers.map(s => checkServer(s, "sub")),
+        ...dubServers.map(s => checkServer(s, "dub"))
+    ]);
+
+    setAvailableServers(workingServers);
+    if (workingServers.length > 0) {
+      setActiveServer(workingServers[0]);
+    }
+  }, [serversData, selectedEpisode, refetch, serversSearched]);
+
+  useEffect(() => {
     findWorkingServers();
-  }, [serversData, selectedEpisode, refetch, serverName]);
+  }, [findWorkingServers]);
 
   const [watchedDetails, setWatchedDetails] = useState<Array<IWatchedAnime>>(
     JSON.parse(localStorage.getItem("watched") as string) || []
   );
 
-  function changeServer(newServerName: string, newKey: string) {
-    setServerName(newServerName);
-    setKey(newKey);
-    const preference = { serverName: newServerName, key: newKey };
-    localStorage.setItem("serverPreference", JSON.stringify(preference));
+  function changeServer(server: IServer) {
+    setActiveServer(server);
+    localStorage.setItem("serverPreference", JSON.stringify(server));
   }
 
   async function onHandleAutoSkipChange(value: boolean) {
@@ -169,13 +163,17 @@ const VideoPlayerSection = () => {
     }
     //eslint-disable-next-line
   }, [episodeData, selectedEpisode, auth]);
-
-  if (isLoading && !episodeData)
+  
+  const isLoading = isEpisodeDataLoading || (!serversSearched && !availableServers.length);
+  
+  if (isLoading) {
     return (
       <div className="h-auto aspect-video lg:max-h-[calc(100vh-150px)] min-h-[20vh] sm:min-h-[30vh] md:min-h-[40vh] lg:min-h-[60vh] w-full animate-pulse bg-slate-700 rounded-md"></div>
     );
-
-  return !episodeData || episodeData?.sources.length === 0 ? (
+  }
+  
+  if (!activeServer || !episodeData || episodeData?.sources.length === 0) {
+     return (
     <>
       <div
         className={
@@ -205,7 +203,10 @@ const VideoPlayerSection = () => {
         </Alert>
       </div>
     </>
-  ) : (
+     )
+  }
+
+  return (
     <div>
       <KitsunePlayer
         key={episodeData?.sources?.[0].url}
@@ -216,39 +217,41 @@ const VideoPlayerSection = () => {
           title: anime.anime.info.name,
           image: anime.anime.info.poster,
         }}
-        subOrDub={key as "sub" | "dub"}
+        subOrDub={activeServer.serverType}
         autoSkip={autoSkip}
       />
       <div className="flex flex-row bg-[#0f172a]  items-start justify-between w-full p-5">
         <div>
+         {availableServers.filter(s => s.serverType === 'sub').length > 0 && (
           <div className="flex flex-row items-center space-x-5">
             <Captions className="text-red-300" />
             <p className="font-bold text-sm">SUB</p>
-            {availableSubServers.map((s, i) => (
+            {availableServers.filter(s => s.serverType === 'sub').map((s, i) => (
               <Button
                 size="sm"
                 key={i}
                 className={`uppercase font-bold ${
-                  serverName === s.serverName && key === "sub" && "bg-red-300"
+                  activeServer.serverName === s.serverName && activeServer.serverType === "sub" && "bg-red-300"
                 }`}
-                onClick={() => changeServer(s.serverName, "sub")}
+                onClick={() => changeServer(s)}
               >
                 {s.serverName}
               </Button>
             ))}
           </div>
-          {!!availableDubServers.length && (
+         )}
+         {availableServers.filter(s => s.serverType === 'dub').length > 0 && (
             <div className="flex flex-row items-center space-x-5 mt-2">
               <Mic className="text-green-300" />
               <p className="font-bold text-sm">DUB</p>
-              {availableDubServers.map((s, i) => (
+              {availableServers.filter(s => s.serverType === 'dub').map((s, i) => (
                 <Button
                   size="sm"
                   key={i}
                   className={`uppercase font-bold ${
-                    serverName === s.serverName && key === "dub" && "bg-green-300"
+                    activeServer.serverName === s.serverName && activeServer.serverType === "dub" && "bg-green-300"
                   }`}
-                  onClick={() => changeServer(s.serverName, "dub")}
+                  onClick={() => changeServer(s)}
                 >
                   {s.serverName}
                 </Button>
