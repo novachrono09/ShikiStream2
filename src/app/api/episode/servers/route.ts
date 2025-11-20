@@ -5,9 +5,7 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const animeEpisodeId = searchParams.get("animeEpisodeId") as string;
 
-    const data = await hianime.getEpisodeServers(
-      decodeURIComponent(animeEpisodeId),
-    );
+    const data = await hianime.getEpisodeServers(animeEpisodeId);
     return Response.json({ data });
   } catch (err) {
     console.log(err);
