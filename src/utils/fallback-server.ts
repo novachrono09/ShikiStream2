@@ -25,9 +25,19 @@ export function getFallbackServer(serversData: IEpisodeServers | undefined): {
   }
 
   if (serversData) {
-    const keys: Array<"sub" | "dub" | "raw"> = ["sub", "dub", "raw"]; // Only valid keys
+    // Prioritize "vidstreaming" server for "sub" category
+    const subServers = serversData.sub || [];
+    const vidstreamingServer = subServers.find(s => s.serverName === "vidstreaming");
+    if (vidstreamingServer) {
+      return {
+        serverName: vidstreamingServer.serverName,
+        key: "sub",
+      };
+    }
+
+    const keys: Array<"sub" | "dub" | "raw"> = ["sub", "dub", "raw"];
     for (const key of keys) {
-      const serverList = serversData[key]; // Safely index the object
+      const serverList = serversData[key];
       if (serverList && serverList[0]?.serverName) {
         return {
           serverName: serverList[0].serverName,
@@ -39,5 +49,5 @@ export function getFallbackServer(serversData: IEpisodeServers | undefined): {
   return {
     serverName: "",
     key: "",
-  }; // Fallback if no valid server is found
+  };
 }

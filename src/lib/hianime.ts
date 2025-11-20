@@ -1,3 +1,5 @@
 import { HiAnime } from "aniwatch";
 
-export const hianime = new HiAnime.Scraper();
+const proxyUrl = process.env.NEXT_PUBLIC_PROXY_URL;
+
+export const hianime = new HiAnime.Scraper(proxyUrl);
