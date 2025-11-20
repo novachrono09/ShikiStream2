@@ -1,3 +1,4 @@
+
 "use client";
 
 import React from "react";
@@ -63,7 +64,9 @@ const EpisodeCard = ({
   } else if (!showCard && variant === "card") {
     return (
       <Link
-        href={`${ROUTES.WATCH}?anime=${props.animeId}&episode=${props.episode.episodeId}`}
+        href={`${ROUTES.WATCH}?anime=${props.animeId}&episode=${encodeURIComponent(
+          props.episode.episodeId,
+        )}`}
       >
         <div
           className={cn([
@@ -79,7 +82,9 @@ const EpisodeCard = ({
   } else {
     return (
       <Link
-        href={`${ROUTES.WATCH}?anime=${props.animeId}&episode=${props.episode.episodeId}`}
+        href={`${ROUTES.WATCH}?anime=${props.animeId}&episode=${encodeURIComponent(
+          props.episode.episodeId,
+        )}`}
       >
         <div
           className="flex gap-5 items-center w-full relative h-fit rounded-md p-2"
