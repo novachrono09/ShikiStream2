@@ -1,3 +1,3 @@
-import { HiAnime } from "aniwatch";
+import { Scraper } from "aniwatch";
 
-export const hianime = new HiAnime.Scraper();
+export const hianime = new Scraper();
