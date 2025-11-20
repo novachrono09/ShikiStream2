@@ -20,6 +20,9 @@ const VideoPlayerSection = () => {
 
   const [serverName, setServerName] = useState<string>("");
   const [key, setKey] = useState<string>("");
+  
+  const [availableSubServers, setAvailableSubServers] = useState<any[]>([]);
+  const [availableDubServers, setAvailableDubServers] = useState<any[]>([]);
 
   const { auth, setAuth } = useAuthStore();
   const [autoSkip, setAutoSkip] = useState<boolean>(
@@ -30,15 +33,16 @@ const VideoPlayerSection = () => {
     data: episodeData,
     isLoading,
     refetch,
-  } = useGetEpisodeData(selectedEpisode, serverName, key, false); // Start with enabled: false
+  } = useGetEpisodeData(selectedEpisode, serverName, key, !!serverName);
 
   useEffect(() => {
-    if (!serversData || episodeData) return;
+    if (!serversData || serverName) return;
 
-    const findWorkingServer = async () => {
+    const findWorkingServers = async () => {
       const subServers = serversData.sub || [];
       const dubServers = serversData.dub || [];
 
+      const workingSub = [];
       for (const server of subServers) {
         try {
           const { data: newData, isSuccess } = await refetch({
@@ -49,11 +53,8 @@ const VideoPlayerSection = () => {
               "sub",
             ],
           });
-
           if (isSuccess && newData && newData.sources.length > 0) {
-            setServerName(server.serverName);
-            setKey("sub");
-            return;
+            workingSub.push(server);
           }
         } catch (error) {
           console.error(
@@ -62,7 +63,9 @@ const VideoPlayerSection = () => {
           );
         }
       }
+      setAvailableSubServers(workingSub);
 
+      const workingDub = [];
       for (const server of dubServers) {
         try {
           const { data: newData, isSuccess } = await refetch({
@@ -73,11 +76,8 @@ const VideoPlayerSection = () => {
               "dub",
             ],
           });
-
           if (isSuccess && newData && newData.sources.length > 0) {
-            setServerName(server.serverName);
-            setKey("dub");
-            return;
+            workingDub.push(server);
           }
         } catch (error) {
           console.error(
@@ -86,10 +86,19 @@ const VideoPlayerSection = () => {
           );
         }
       }
+      setAvailableDubServers(workingDub);
+
+      if (workingSub.length > 0) {
+        setServerName(workingSub[0].serverName);
+        setKey("sub");
+      } else if (workingDub.length > 0) {
+        setServerName(workingDub[0].serverName);
+        setKey("dub");
+      }
     };
 
-    findWorkingServer();
-  }, [serversData, episodeData, refetch, selectedEpisode]);
+    findWorkingServers();
+  }, [serversData, selectedEpisode, refetch, serverName]);
 
   const [watchedDetails, setWatchedDetails] = useState<Array<IWatchedAnime>>(
     JSON.parse(localStorage.getItem("watched") as string) || []
@@ -215,7 +224,7 @@ const VideoPlayerSection = () => {
           <div className="flex flex-row items-center space-x-5">
             <Captions className="text-red-300" />
             <p className="font-bold text-sm">SUB</p>
-            {serversData?.sub.map((s, i) => (
+            {availableSubServers.map((s, i) => (
               <Button
                 size="sm"
                 key={i}
@@ -228,11 +237,11 @@ const VideoPlayerSection = () => {
               </Button>
             ))}
           </div>
-          {!!serversData?.dub.length && (
+          {!!availableDubServers.length && (
             <div className="flex flex-row items-center space-x-5 mt-2">
               <Mic className="text-green-300" />
               <p className="font-bold text-sm">DUB</p>
-              {serversData?.dub.map((s, i) => (
+              {availableDubServers.map((s, i) => (
                 <Button
                   size="sm"
                   key={i}
