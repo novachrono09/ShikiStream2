@@ -13,7 +13,7 @@ export async function GET(req: Request) {
     const category = searchParams.get("category") as "sub" | "dub" | "raw";
 
     const data = await hianime.getEpisodeSources(
-      episodeId,
+      encodeURIComponent(episodeId),
       server,
       category,
     );
