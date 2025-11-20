@@ -2,22 +2,20 @@
 
 import React, { useEffect, useState } from "react";
 import { useAnimeStore } from "@/store/anime-store";
-
 import { IWatchedAnime } from "@/types/watched-anime";
 import KitsunePlayer from "@/components/kitsune-player";
 import { useGetEpisodeData } from "@/query/get-episode-data";
 import { useGetEpisodeServers } from "@/query/get-episode-servers";
-import { getFallbackServer } from "@/utils/fallback-server";
 import { AlertCircleIcon, Captions, Mic } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useAuthStore } from "@/store/auth-store";
 import { pb } from "@/lib/pocketbase";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { GET_EPISODE_DATA } from "@/constants/query-keys";
 
 const VideoPlayerSection = () => {
   const { selectedEpisode, anime } = useAnimeStore();
-
   const { data: serversData } = useGetEpisodeServers(selectedEpisode);
 
   const [serverName, setServerName] = useState<string>("");
@@ -25,29 +23,82 @@ const VideoPlayerSection = () => {
 
   const { auth, setAuth } = useAuthStore();
   const [autoSkip, setAutoSkip] = useState<boolean>(
-    auth?.autoSkip || Boolean(localStorage.getItem("autoSkip")) || false,
+    auth?.autoSkip || Boolean(localStorage.getItem("autoSkip")) || false
   );
+
+  const {
+    data: episodeData,
+    isLoading,
+    refetch,
+  } = useGetEpisodeData(selectedEpisode, serverName, key, false); // Start with enabled: false
 
   useEffect(() => {
-    const { serverName, key } = getFallbackServer(serversData);
-    setServerName(serverName);
-    setKey(key);
-  }, [serversData]);
+    if (!serversData || episodeData) return;
 
-  const { data: episodeData, isLoading } = useGetEpisodeData(
-    selectedEpisode,
-    serverName,
-    key,
-  );
+    const findWorkingServer = async () => {
+      const subServers = serversData.sub || [];
+      const dubServers = serversData.dub || [];
+
+      for (const server of subServers) {
+        try {
+          const { data: newData, isSuccess } = await refetch({
+            queryKey: [
+              GET_EPISODE_DATA,
+              selectedEpisode,
+              server.serverName,
+              "sub",
+            ],
+          });
+
+          if (isSuccess && newData && newData.sources.length > 0) {
+            setServerName(server.serverName);
+            setKey("sub");
+            return;
+          }
+        } catch (error) {
+          console.error(
+            `Server ${server.serverName} (sub) failed:`,
+            error
+          );
+        }
+      }
+
+      for (const server of dubServers) {
+        try {
+          const { data: newData, isSuccess } = await refetch({
+            queryKey: [
+              GET_EPISODE_DATA,
+              selectedEpisode,
+              server.serverName,
+              "dub",
+            ],
+          });
+
+          if (isSuccess && newData && newData.sources.length > 0) {
+            setServerName(server.serverName);
+            setKey("dub");
+            return;
+          }
+        } catch (error) {
+          console.error(
+            `Server ${server.serverName} (dub) failed:`,
+            error
+          );
+        }
+      }
+    };
+
+    findWorkingServer();
+  }, [serversData, episodeData, refetch, selectedEpisode]);
 
   const [watchedDetails, setWatchedDetails] = useState<Array<IWatchedAnime>>(
-    JSON.parse(localStorage.getItem("watched") as string) || [],
+    JSON.parse(localStorage.getItem("watched") as string) || []
   );
 
-  function changeServer(serverName: string, key: string) {
-    setServerName(serverName);
-    setKey(key);
-    const preference = { serverName, key };
+  function changeServer(newServerName: string, newKey: string) {
+    setServerName(newServerName);
+    setKey(newKey);
+    const preference = { serverName: newServerName, key: newKey };
     localStorage.setItem("serverPreference", JSON.stringify(preference));
   }
 
@@ -57,69 +108,60 @@ const VideoPlayerSection = () => {
       localStorage.setItem("autoSkip", JSON.stringify(value));
       return;
     }
-    const res = await pb.collection("users").update(auth.id, {
-      autoSkip: value,
-    });
+    const res = await pb
+      .collection("users")
+      .update(auth.id, { autoSkip: value });
     if (res) {
       setAuth({ ...auth, autoSkip: value });
     }
   }
 
   useEffect(() => {
-    if (auth) return;
+    if (auth || !episodeData) return;
     if (!Array.isArray(watchedDetails)) {
       localStorage.removeItem("watched");
       return;
     }
 
-    if (episodeData) {
-      const existingAnime = watchedDetails.find(
-        (watchedAnime) => watchedAnime.anime.id === anime.anime.info.id,
-      );
+    const existingAnime = watchedDetails.find(
+      (watchedAnime) => watchedAnime.anime.id === anime.anime.info.id
+    );
 
-      if (!existingAnime) {
-        // Add new anime entry if it doesn't exist
-        const updatedWatchedDetails = [
-          ...watchedDetails,
-          {
-            anime: {
-              id: anime.anime.info.id,
-              title: anime.anime.info.name,
-              poster: anime.anime.info.poster,
-            },
-            episodes: [selectedEpisode],
+    if (!existingAnime) {
+      const updatedWatchedDetails = [
+        ...watchedDetails,
+        {
+          anime: {
+            id: anime.anime.info.id,
+            title: anime.anime.info.name,
+            poster: anime.anime.info.poster,
           },
-        ];
+          episodes: [selectedEpisode],
+        },
+      ];
+      localStorage.setItem("watched", JSON.stringify(updatedWatchedDetails));
+      setWatchedDetails(updatedWatchedDetails);
+    } else {
+      const episodeAlreadyWatched =
+        existingAnime.episodes.includes(selectedEpisode);
+
+      if (!episodeAlreadyWatched) {
+        const updatedWatchedDetails = watchedDetails.map((watchedAnime) =>
+          watchedAnime.anime.id === anime.anime.info.id
+            ? {
+                ...watchedAnime,
+                episodes: [...watchedAnime.episodes, selectedEpisode],
+              }
+            : watchedAnime
+        );
         localStorage.setItem("watched", JSON.stringify(updatedWatchedDetails));
         setWatchedDetails(updatedWatchedDetails);
-      } else {
-        // Update the existing anime entry
-        const episodeAlreadyWatched =
-          existingAnime.episodes.includes(selectedEpisode);
-
-        if (!episodeAlreadyWatched) {
-          // Add the new episode to the list
-          const updatedWatchedDetails = watchedDetails.map((watchedAnime) =>
-            watchedAnime.anime.id === anime.anime.info.id
-              ? {
-                  ...watchedAnime,
-                  episodes: [...watchedAnime.episodes, selectedEpisode],
-                }
-              : watchedAnime,
-          );
-
-          localStorage.setItem(
-            "watched",
-            JSON.stringify(updatedWatchedDetails),
-          );
-          setWatchedDetails(updatedWatchedDetails);
-        }
       }
     }
     //eslint-disable-next-line
   }, [episodeData, selectedEpisode, auth]);
 
-  if (isLoading || !episodeData)
+  if (isLoading && !episodeData)
     return (
       <div className="h-auto aspect-video lg:max-h-[calc(100vh-150px)] min-h-[20vh] sm:min-h-[30vh] md:min-h-[40vh] lg:min-h-[60vh] w-full animate-pulse bg-slate-700 rounded-md"></div>
     );
@@ -128,11 +170,13 @@ const VideoPlayerSection = () => {
     <>
       <div
         className={
-          "relative w-full h-auto aspect-video  min-h-[20vh] sm:min-h-[30vh] md:min-h-[40vh] lg:min-h-[60vh] max-h-[500px] lg:max-h-[calc(100vh-150px)] bg-black overflow-hidde  n p-4"
+          "relative w-full h-auto aspect-video  min-h-[20vh] sm:min-h-[30vh] md:min-h-[40vh] lg:min-h-[60vh] max-h-[500px] lg:max-h-[calc(100vh-150px)] bg-black overflow-hidden p-4"
         }
       >
         <iframe
-          src={`https://megaplay.buzz/stream/s-2/${serversData?.episodeId.split("?ep=")[1]}/sub`}
+          src={`https://megaplay.buzz/stream/s-2/${
+            serversData?.episodeId.split("?ep=")[1]
+          }/sub`}
           width="100%"
           height="100%"
           allowFullScreen
@@ -175,7 +219,9 @@ const VideoPlayerSection = () => {
               <Button
                 size="sm"
                 key={i}
-                className={`uppercase font-bold ${serverName === s.serverName && key === "sub" && "bg-red-300"}`}
+                className={`uppercase font-bold ${
+                  serverName === s.serverName && key === "sub" && "bg-red-300"
+                }`}
                 onClick={() => changeServer(s.serverName, "sub")}
               >
                 {s.serverName}
@@ -190,7 +236,9 @@ const VideoPlayerSection = () => {
                 <Button
                   size="sm"
                   key={i}
-                  className={`uppercase font-bold ${serverName === s.serverName && key === "dub" && "bg-green-300"}`}
+                  className={`uppercase font-bold ${
+                    serverName === s.serverName && key === "dub" && "bg-green-300"
+                  }`}
                   onClick={() => changeServer(s.serverName, "dub")}
                 >
                   {s.serverName}
